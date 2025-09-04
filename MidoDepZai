@@ -1,0 +1,185 @@
+-- IslandConfig
+local islands = {
+	{ name = "StarterIsland", levelMin = 1,   pos = Vector3.new(0, 5, 0) },
+	{ name = "Jungle",        levelMin = 10,  pos = Vector3.new(100, 5, -150) },
+	{ name = "Desert",        levelMin = 25,  pos = Vector3.new(-300, 5, 200) },
+	{ name = "Volcano",       levelMin = 50,  pos = Vector3.new(600, 15, 500) },
+}
+return islands
+2️⃣ ReplicatedStorage/MobLootService (ModuleScript)
+lua
+Sao chép mã
+local CS = game:GetService("CollectionService")
+
+local M = {}
+
+function M.getNearestMob(fromPos)
+	local nearest, d2 = nil, math.huge
+	for _, mob in ipairs(CS:GetTagged("Mob")) do
+		local hum = mob:FindFirstChild("Humanoid")
+		local hrp = mob:FindFirstChild("HumanoidRootPart")
+		if hum and hum.Health > 0 and hrp then
+			local dist2 = (hrp.Position - fromPos).Magnitude
+			if dist2 < d2 then
+				d2, nearest = dist2, mob
+			end
+		end
+	end
+	return nearest
+end
+
+function M.getNearestLoot(fromPos, radius)
+	local nearest, d2 = nil, math.huge
+	for _, loot in ipairs(CS:GetTagged("Loot")) do
+		if loot:IsDescendantOf(workspace) and loot.PrimaryPart then
+			local dist = (loot.PrimaryPart.Position - fromPos).Magnitude
+			if dist <= (radius or 60) and dist < d2 then
+				d2, nearest = dist, loot
+			end
+		end
+	end
+	return nearest
+end
+
+return M
+3️⃣ ServerScriptService/MobSpawner (Script)
+lua
+Sao chép mã
+-- MobSpawner: tạo quái để test
+local CS = game:GetService("CollectionService")
+
+while true do
+	local mob = Instance.new("Model")
+	mob.Name = "TestMob"
+
+	local hrp = Instance.new("Part")
+	hrp.Size = Vector3.new(2, 2, 1)
+	hrp.Anchored = false
+	hrp.CanCollide = true
+	hrp.Name = "HumanoidRootPart"
+	hrp.Parent = mob
+
+	local hum = Instance.new("Humanoid")
+	hum.MaxHealth = 50
+	hum.Health = 50
+	hum.Parent = mob
+
+	mob.PrimaryPart = hrp
+	mob:SetPrimaryPartCFrame(CFrame.new(math.random(-30,30), 5, math.random(-30,30)))
+	mob.Parent = workspace
+
+	CS:AddTag(mob, "Mob")
+
+	wait(15) -- spawn 1 quái mỗi 15 giây
+end
+4️⃣ ServerScriptService/Leaderstats (Script)
+lua
+Sao chép mã
+-- Leaderstats: tạo Level & Exp cho người chơi
+game.Players.PlayerAdded:Connect(function(plr)
+	local stats = Instance.new("Folder")
+	stats.Name = "leaderstats"
+	stats.Parent = plr
+
+	local level = Instance.new("IntValue")
+	level.Name = "Level"
+	level.Value = 1
+	level.Parent = stats
+
+	local exp = Instance.new("IntValue")
+	exp.Name = "Exp"
+	exp.Value = 0
+	exp.Parent = stats
+end)
+5️⃣ StarterPlayerScripts/AutoFarm.client.lua (LocalScript)
+lua
+Sao chép mã
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local char = player.Character or player.CharacterAdded:Wait()
+local hrp = char:WaitForChild("HumanoidRootPart")
+
+local Islands = require(ReplicatedStorage:WaitForChild("IslandConfig"))
+local MobLootService = require(ReplicatedStorage:WaitForChild("MobLootService"))
+
+-- UI trạng thái
+local gui = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
+local label = Instance.new("TextLabel", gui)
+label.Size = UDim2.new(0, 320, 0, 40)
+label.Position = UDim2.new(0, 20, 0, 20)
+label.BackgroundTransparency = 0.2
+label.TextScaled = true
+
+local Auto = true
+local function setStatus(txt) label.Text = "AutoFarm: "..txt end
+
+-- Lấy Level từ leaderstats
+local function getLevel()
+	local stats = player:FindFirstChild("leaderstats")
+	if stats then
+		return stats.Level.Value
+	end
+	return 1
+end
+
+local function getIslandForLevel(lv)
+	local best = Islands[1]
+	for _, isl in ipairs(Islands) do
+		if lv >= isl.levelMin then best = isl end
+	end
+	return best
+end
+
+local function simpleTeleport(v3)
+	hrp.CFrame = CFrame.new(v3 + Vector3.new(0, 3, 0))
+end
+
+local function attackMob(mob)
+	local hum = mob:FindFirstChild("Humanoid")
+	local hrpm = mob:FindFirstChild("HumanoidRootPart")
+	if not hum or not hrpm then return end
+	setStatus("Đánh "..mob.Name)
+	while Auto and hum.Health > 0 do
+		hum.Health -= 10
+		task.wait(0.3)
+	end
+	player.leaderstats.Exp.Value += 5
+	if player.leaderstats.Exp.Value >= 20 then
+		player.leaderstats.Level.Value += 1
+		player.leaderstats.Exp.Value = 0
+	end
+end
+
+-- Phím tắt bật/tắt
+UserInputService.InputBegan:Connect(function(input, gp)
+	if gp then return end
+	if input.KeyCode == Enum.KeyCode.P then
+		Auto = not Auto
+		setStatus(Auto and "Bật" or "Tắt")
+	end
+end)
+
+-- Vòng lặp chính
+task.spawn(function()
+	while true do
+		if not Auto then task.wait(0.5) continue end
+		local lv = getLevel()
+		local isl = getIslandForLevel(lv)
+		setStatus("Đảo "..isl.name.." (lv "..lv..")")
+		simpleTeleport(isl.pos)
+
+		local mob = MobLootService.getNearestMob(hrp.Position)
+		if mob then
+			attackMob(mob)
+		else
+			setStatus("Không thấy quái")
+			task.wait(1)
+		end
+		task.wait(0.1)
+	end
+end)
+
+setStatus("Bật (nhấn P để bật/tắt)")
